@@ -1,66 +1,46 @@
-const words = ["apple", "car", "tree", "house", "dog"];
+﻿const WORDS = ["Apple", "Banana", "Carrot", "Dolphin", "Elephant", "Fire", "Guitar", "House", "Island", "Jungle"];
 
 const rooms = {};
 
-/*
-roomId: {
-  players: [{ socketId, name, score }],
-  drawerIndex: 0,
-  word: "apple"
-}
-*/
-
-function createRoom(roomId) {
-  if (!rooms[roomId]) {
+const createRoom = (roomId) => {
     rooms[roomId] = {
-      players: [],
-      drawerIndex: 0,
-      word: null,
+        players: [],
+        currentDrawer: null,
+        word: "",
+        wordHint: "",
+        timer: 60,
+        roundActive: false,
+        messages: [],
+        interval: null
     };
-  }
-}
-
-function addPlayer(roomId, socketId, name) {
-  createRoom(roomId);
-  rooms[roomId].players.push({
-    socketId,
-    name,
-    score: 0,
-  });
-}
-
-function removePlayer(socketId) {
-  for (const roomId in rooms) {
-    rooms[roomId].players = rooms[roomId].players.filter(
-      (p) => p.socketId !== socketId
-    );
-
-    if (rooms[roomId].players.length === 0) {
-      delete rooms[roomId];
-    }
-  }
-}
-
-function startRound(roomId) {
-  const room = rooms[roomId];
-  room.word = words[Math.floor(Math.random() * words.length)];
-}
-
-function nextTurn(roomId) {
-  const room = rooms[roomId];
-  room.drawerIndex =
-    (room.drawerIndex + 1) % room.players.length;
-  startRound(roomId);
-}
-
-function getRoom(roomId) {
-  return rooms[roomId];
-}
-
-module.exports = {
-  addPlayer,
-  removePlayer,
-  startRound,
-  nextTurn,
-  getRoom,
+    return rooms[roomId];
 };
+
+const getRoom = (roomId) => rooms[roomId] || createRoom(roomId);
+
+const selectNewDrawer = (room) => {
+    if (room.players.length === 0) return null;
+    const currentIndex = room.players.findIndex(p => p.id === room.currentDrawer);
+    const nextIndex = (currentIndex + 1) % room.players.length;
+    room.currentDrawer = room.players[nextIndex].id;
+    return room.currentDrawer;
+};
+
+const startTimer = (roomId, io) => {
+    const room = rooms[roomId];
+    if (room.interval) clearInterval(room.interval);
+
+    room.interval = setInterval(() => {
+        if (room.timer > 0 && room.roundActive) {
+            room.timer--;
+            io.to(roomId).emit("room-update", room);
+        } else {
+            clearInterval(room.interval);
+            room.roundActive = false;
+            // Logic to start next round or end game can go here
+            io.to(roomId).emit("room-update", room);
+        }
+    }, 1000);
+};
+
+module.exports = { getRoom, rooms, selectNewDrawer, startTimer, WORDS };
