@@ -5,12 +5,24 @@ module.exports = (io) => {
         console.log("Connected:", socket.id);
 
         socket.on("join-room", ({ roomId, name }) => {
+            if (!roomId || !name) {
+                console.error("join-room event missing roomId or name", { roomId, name });
+                return;
+            }
+
             socket.join(roomId);
             socket.roomId = roomId;
             socket.userName = name;
 
             const room = getRoom(roomId);
-            
+            if (!room) {
+                console.error("Could not retrieve or create room", roomId);
+                return;
+            }
+            room.players = room.players || [];
+            room.messages = room.messages || [];
+            room.currentDrawer = room.currentDrawer || null;
+
             // RECONNECTION LOGIC: Find player by name instead of ID
             const existingPlayer = room.players.find(p => p.name === name);
             
