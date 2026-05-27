@@ -10,28 +10,42 @@ module.exports = (io) => {
             socket.userName = name;
 
             const room = getRoom(roomId);
-            // Avoid duplicate players if they reconnect
-            if (!room.players.find(p => p.id === socket.id)) {
+            
+            // RECONNECTION LOGIC: Find player by name instead of ID
+            const existingPlayer = room.players.find(p => p.name === name);
+            
+            if (existingPlayer) {
+                const oldId = existingPlayer.id;
+                existingPlayer.id = socket.id; // Update to new Socket ID
+                
+                // If the reconnected player was the drawer, update the room's drawer ID
+                if (room.currentDrawer === oldId) {
+                    room.currentDrawer = socket.id;
+                }
+                console.log(`Reconnected player: ${name}`);
+            } else {
                 room.players.push({ id: socket.id, name, score: 0 });
             }
 
-            // Tell everyone a new player joined
+            // Sync room state with everyone immediately
             io.to(roomId).emit("room-update", room);
 
-            // If 2 players are here and no game is active, start a round
+            // If game is ready but no drawer is assigned
             if (room.players.length >= 2 && !room.currentDrawer) {
                 const drawerId = selectNewDrawer(room);
-                
-                // IMPORTANT: Tell everyone who the drawer is NOW
                 io.to(roomId).emit("room-update", room);
 
-                // Send word choices ONLY to the drawer
                 const choices = [
                     WORDS[Math.floor(Math.random() * WORDS.length)],
                     WORDS[Math.floor(Math.random() * WORDS.length)],
                     WORDS[Math.floor(Math.random() * WORDS.length)]
                 ];
                 io.to(drawerId).emit("show-word-choices", choices);
+            } 
+            // If reconnected player IS the drawer and hasn't picked a word yet, resend choices
+            else if (room.currentDrawer === socket.id && !room.roundActive) {
+                const choices = [WORDS[0], WORDS[1], WORDS[2]];
+                socket.emit("show-word-choices", choices);
             }
         });
 
@@ -46,7 +60,6 @@ module.exports = (io) => {
                 io.to(roomId).emit("clear-canvas");
                 io.to(roomId).emit("room-update", room);
                 
-                // Start the countdown
                 if (room.interval) clearInterval(room.interval);
                 room.interval = setInterval(() => {
                     if (room.timer > 0 && room.roundActive) {
@@ -55,7 +68,7 @@ module.exports = (io) => {
                     } else {
                         clearInterval(room.interval);
                         room.roundActive = false;
-                        // Logic to pick next drawer can go here
+                        room.currentDrawer = null; // Prepare for next round
                         io.to(roomId).emit("room-update", room);
                     }
                 }, 1000);
@@ -81,7 +94,7 @@ module.exports = (io) => {
             if (isCorrect) {
                 const player = room.players.find(p => p.id === socket.id);
                 if (player) player.score += 100;
-                // Optional: End round if guessed
+                room.roundActive = false; // End round on success
             }
 
             room.messages.push(msgData);
@@ -90,14 +103,9 @@ module.exports = (io) => {
         });
 
         socket.on("disconnect", () => {
-            if (socket.roomId) {
-                const room = getRoom(socket.roomId);
-                room.players = room.players.filter(p => p.id !== socket.id);
-                if (room.players.length === 0) {
-                    if (room.interval) clearInterval(room.interval);
-                }
-                io.to(socket.roomId).emit("room-update", room);
-            }
+            console.log("Disconnected:", socket.id);
+            // We don't remove players immediately to allow for reconnection
+            // They are filtered out if the room becomes empty or after a timeout
         });
     });
 };
