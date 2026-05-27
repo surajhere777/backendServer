@@ -1,83 +1,103 @@
-const rooms = require("./rooms");
+const { getRoom, selectNewDrawer, WORDS } = require('./rooms');
 
-module.exports = function (io) {
-  console.log("✅ socket.js loaded (exporting function)");
+module.exports = (io) => {
+    io.on("connection", (socket) => {
+        console.log("Connected:", socket.id);
 
-  io.on("connection", (socket) => {
-    console.log("🟢 Player connected:", socket.id);
+        socket.on("join-room", ({ roomId, name }) => {
+            socket.join(roomId);
+            socket.roomId = roomId;
+            socket.userName = name;
 
-    // JOIN ROOM
-    socket.on("join-room", ({ roomId, name }) => {
-      socket.join(roomId);
-      rooms.addPlayer(roomId, socket.id, name);
+            const room = getRoom(roomId);
+            // Avoid duplicate players if they reconnect
+            if (!room.players.find(p => p.id === socket.id)) {
+                room.players.push({ id: socket.id, name, score: 0 });
+            }
 
-      const room = rooms.getRoom(roomId);
+            // Tell everyone a new player joined
+            io.to(roomId).emit("room-update", room);
 
-      // start game if first player
-      if (room.players.length === 1) {
-        rooms.startRound(roomId);
-      }
+            // If 2 players are here and no game is active, start a round
+            if (room.players.length >= 2 && !room.currentDrawer) {
+                const drawerId = selectNewDrawer(room);
+                
+                // IMPORTANT: Tell everyone who the drawer is NOW
+                io.to(roomId).emit("room-update", room);
 
-      // send room update to all players
-      io.to(roomId).emit("room-update", {
-        players: room.players,
-        drawerIndex: room.drawerIndex,
-      });
-
-      // send secret word ONLY to drawer
-      if (room && room.players.length > 0) {
-        const drawer = room.players[room.drawerIndex];
-        if (drawer) {
-          io.to(drawer.socketId).emit("word", room.word);
-        }
-      }
-    });
-
-    // DRAW EVENT
-    socket.on("draw", ({ roomId, stroke }) => {
-      socket.to(roomId).emit("draw", stroke);
-    });
-
-    // GUESS EVENT
-    socket.on("guess", ({ roomId, message, name }) => {
-      const room = rooms.getRoom(roomId);
-      if (!room) return;
-
-      if (message.toLowerCase() === room.word) {
-        const player = room.players.find(
-          (p) => p.name === name
-        );
-        if (player) player.score += 10;
-
-        rooms.nextTurn(roomId);
-
-        io.to(roomId).emit("correct-guess", {
-          name,
-          word: room.word,
+                // Send word choices ONLY to the drawer
+                const choices = [
+                    WORDS[Math.floor(Math.random() * WORDS.length)],
+                    WORDS[Math.floor(Math.random() * WORDS.length)],
+                    WORDS[Math.floor(Math.random() * WORDS.length)]
+                ];
+                io.to(drawerId).emit("show-word-choices", choices);
+            }
         });
 
-        const updatedRoom = rooms.getRoom(roomId);
+        socket.on("word-selected", ({ roomId, word }) => {
+            const room = getRoom(roomId);
+            if (room) {
+                room.word = word.toLowerCase();
+                room.wordHint = word.replace(/[a-zA-Z]/g, "_ ");
+                room.roundActive = true;
+                room.timer = 60;
 
-        io.to(roomId).emit("room-update", {
-          players: updatedRoom.players,
-          drawerIndex: updatedRoom.drawerIndex,
+                io.to(roomId).emit("clear-canvas");
+                io.to(roomId).emit("room-update", room);
+                
+                // Start the countdown
+                if (room.interval) clearInterval(room.interval);
+                room.interval = setInterval(() => {
+                    if (room.timer > 0 && room.roundActive) {
+                        room.timer--;
+                        io.to(roomId).emit("room-update", room);
+                    } else {
+                        clearInterval(room.interval);
+                        room.roundActive = false;
+                        // Logic to pick next drawer can go here
+                        io.to(roomId).emit("room-update", room);
+                    }
+                }, 1000);
+            }
         });
 
-        if (updatedRoom && updatedRoom.players.length > 0) {
-          const drawer =
-            updatedRoom.players[updatedRoom.drawerIndex];
-          if (drawer) {
-            io.to(drawer.socketId).emit("word", updatedRoom.word);
-          }
-        }
-      } else {
-        io.to(roomId).emit("guess", { name, message });
-      }
-    });
+        socket.on("draw", (data) => {
+            socket.to(data.roomId).emit("draw", data.stroke);
+        });
 
-    socket.on("disconnect", () => {
-      rooms.removePlayer(socket.id);
-      console.log("🔴 Player disconnected:", socket.id);
+        socket.on("send-guess", ({ roomId, message }) => {
+            const room = getRoom(roomId);
+            if (!room || !room.roundActive) return;
+
+            const isCorrect = message.toLowerCase().trim() === room.word;
+            const msgData = {
+                userName: socket.userName,
+                message: isCorrect ? "Guessed the word! 🎉" : message,
+                isCorrect,
+                isSystem: isCorrect
+            };
+
+            if (isCorrect) {
+                const player = room.players.find(p => p.id === socket.id);
+                if (player) player.score += 100;
+                // Optional: End round if guessed
+            }
+
+            room.messages.push(msgData);
+            io.to(roomId).emit("new-message", msgData);
+            io.to(roomId).emit("room-update", room);
+        });
+
+        socket.on("disconnect", () => {
+            if (socket.roomId) {
+                const room = getRoom(socket.roomId);
+                room.players = room.players.filter(p => p.id !== socket.id);
+                if (room.players.length === 0) {
+                    if (room.interval) clearInterval(room.interval);
+                }
+                io.to(socket.roomId).emit("room-update", room);
+            }
+        });
     });
-  });
 };
