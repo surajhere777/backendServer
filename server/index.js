@@ -20,7 +20,7 @@ socketHandler(io);
 // Basic route for health check
 app.get('/version-check', (req, res) => {
     res.json({
-        latestVersion: "1.0.1", // This MUST match the version in your pubspec.yaml
+        latestVersion: "1.0.2", // This MUST match the version in your pubspec.yaml
         downloadUrl: "https://github.com/surajhere777/backendServer/releases/download/v1.0.1/app-release.apk",
         releaseNotes: "🔥 Fixed canvas flickering and keyboard issues! Drawing is now smooth."
     });
