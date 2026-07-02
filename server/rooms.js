@@ -1,5 +1,4 @@
 const WORDS = ["APPLE", "BANANA", "CHERRY", "DRAGON", "EAGLE", "FLOWER", "GUITAR", "HAMMER", "ISLAND", "JACKET", "KITTEN", "LAPTOP", "MOBILE", "ORANGE", "PENCIL", "ROCKET", "SNAKE", "TURTLE", "UMBRELLA", "VIOLIN"];
-
 const rooms = {};
 
 const createRoom = (roomId) => {
@@ -13,6 +12,7 @@ const createRoom = (roomId) => {
         round: 0,
         maxRounds: 10,
         roundActive: false,
+        firstGuessMade: false,
         messages: [],
         interval: null
     };
