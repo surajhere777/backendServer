@@ -3,9 +3,7 @@ const { getRoom, WORDS } = require('./rooms');
 module.exports = (io) => {
     const startNextRound = (roomId) => {
         const room = getRoom(roomId);
-        
-        // Reset canvas for everyone
-        io.to(roomId).emit("clear-canvas");
+        io.to(roomId).emit("clear-canvas"); // Clear canvas for new round
 
         if (room.round >= room.maxRounds) {
             io.to(roomId).emit("game-over", room.players.sort((a, b) => b.score - a.score));
@@ -14,10 +12,10 @@ module.exports = (io) => {
 
         room.round++;
         room.currentDrawerIndex = (room.currentDrawerIndex + 1) % room.players.length;
-        const drawerId = room.players[room.currentDrawerIndex].id;
-        room.currentDrawer = drawerId;
+        room.currentDrawer = room.players[room.currentDrawerIndex].id;
         
         room.roundActive = false;
+        room.firstGuessMade = false; // Track for 100 vs 50 points
         room.word = "";
         room.wordHint = "Choosing a word...";
         
@@ -27,10 +25,8 @@ module.exports = (io) => {
             WORDS[Math.floor(Math.random() * WORDS.length)]
         ];
         
-        // Tell everyone who is drawing and what the round is
         io.to(roomId).emit("room-update", room);
-        // Send choices to the drawer
-        io.to(drawerId).emit("show-word-choices", choices);
+        io.to(room.currentDrawer).emit("show-word-choices", choices);
     };
 
     const runTimer = (roomId) => {
@@ -44,8 +40,12 @@ module.exports = (io) => {
             } else {
                 clearInterval(room.interval);
                 room.roundActive = false;
-                // Wait 3 seconds before next round so players can see scores
-                setTimeout(() => startNextRound(roomId), 3000);
+                // Show leaderboard for 3 seconds before next round
+                io.to(roomId).emit("show-inter-round-leaderboard", true);
+                setTimeout(() => {
+                    io.to(roomId).emit("show-inter-round-leaderboard", false);
+                    startNextRound(roomId);
+                }, 3000);
             }
         }, 1000);
     };
@@ -55,21 +55,12 @@ module.exports = (io) => {
             socket.join(roomId);
             socket.roomId = roomId;
             socket.userName = name;
-
             const room = getRoom(roomId);
-            const existing = room.players.find(p => p.name === name);
-            if (existing) {
-                existing.id = socket.id;
-            } else {
-                room.players.push({ id: socket.id, name, score: 0 });
+            if (!room.players.find(p => p.name === name)) {
+                room.players.push({ id: socket.id, name, score: 0, hasGuessed: false });
             }
-
             io.to(roomId).emit("room-update", room);
-
-            // Start game if 3 players are present
-            if (room.players.length === 3 && room.round === 0) {
-                startNextRound(roomId);
-            }
+            if (room.players.length === 3 && room.round === 0) startNextRound(roomId);
         });
 
         socket.on("word-selected", ({ roomId, word }) => {
@@ -79,6 +70,7 @@ module.exports = (io) => {
                 room.wordHint = word.replace(/[a-zA-Z]/g, "_ ");
                 room.roundActive = true;
                 room.timer = 40;
+                room.players.forEach(p => p.hasGuessed = false); // Reset guessing status
                 io.to(roomId).emit("room-update", room);
                 runTimer(roomId);
             }
@@ -87,38 +79,29 @@ module.exports = (io) => {
         socket.on("send-guess", ({ roomId, message }) => {
             const room = getRoom(roomId);
             if (!room || !room.roundActive) return;
+            const player = room.players.find(p => p.id === socket.id);
+            if (player && player.hasGuessed) return; // Prevent double scoring
 
             const isCorrect = message.toUpperCase().trim() === room.word;
             if (isCorrect) {
-                const player = room.players.find(p => p.id === socket.id);
-                if (player) player.score += (room.timer * 2);
+                player.hasGuessed = true;
+                if (!room.firstGuessMade) {
+                    player.score += 100; // 100 for first
+                    room.firstGuessMade = true;
+                } else {
+                    player.score += 50; // 50 for others
+                }
+                io.to(roomId).emit("new-message", { userName: "System", message: `${socket.userName} guessed it!`, isCorrect: true });
                 
-                io.to(roomId).emit("new-message", {
-                    userName: "System",
-                    message: `${socket.userName} guessed correctly! 🎉`,
-                    isCorrect: true,
-                    isSystem: true
-                });
-                
-                // End round early and show points
-                room.roundActive = false;
-                io.to(roomId).emit("room-update", room);
+                // If all guessers got it, end round early
+                const allGuessed = room.players.filter(p => p.id !== room.currentDrawer).every(p => p.hasGuessed);
+                if (allGuessed) room.timer = 0; 
             } else {
-                io.to(roomId).emit("new-message", {
-                    userName: socket.userName,
-                    message: message,
-                    isCorrect: false,
-                    isSystem: false
-                });
+                io.to(roomId).emit("new-message", { userName: socket.userName, message, isCorrect: false });
             }
+            io.to(roomId).emit("room-update", room);
         });
 
-        socket.on("draw", (data) => {
-            socket.to(data.roomId).emit("draw", data.stroke);
-        });
-
-        socket.on("disconnect", () => {
-            // Optional: Handle player leaving
-        });
+        socket.on("draw", (data) => socket.to(data.roomId).emit("draw", data.stroke));
     });
 };
