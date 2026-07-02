@@ -1,7 +1,6 @@
 const { getRoom, WORDS } = require('./rooms');
 
 module.exports = (io) => {
-    // Helper to send room data WITHOUT the timer object to prevent crashes
     const emitSafeRoomUpdate = (roomId) => {
         const room = getRoom(roomId);
         const { interval, ...safeRoomData } = room; 
@@ -10,7 +9,7 @@ module.exports = (io) => {
 
     const startNextRound = (roomId) => {
         const room = getRoom(roomId);
-        io.to(roomId).emit("clear-canvas"); // Clear drawing for everyone
+        io.to(roomId).emit("clear-canvas");
 
         if (room.round >= room.maxRounds) {
             io.to(roomId).emit("game-over", room.players.sort((a, b) => b.score - a.score));
@@ -21,7 +20,7 @@ module.exports = (io) => {
         room.currentDrawerIndex = (room.currentDrawerIndex + 1) % room.players.length;
         room.currentDrawer = room.players[room.currentDrawerIndex].id;
         
-        room.roundActive = false; // Waiting for drawer to pick word
+        room.roundActive = false;
         room.firstGuessMade = false; 
         room.word = "";
         room.wordHint = "Choosing a word...";
@@ -94,23 +93,14 @@ module.exports = (io) => {
 
             if (message.toUpperCase().trim() === room.word) {
                 player.hasGuessed = true;
-                // SCORING: 100 for 1st, 50 for others
                 const points = !room.firstGuessMade ? 100 : 50;
                 player.score += points;
                 room.firstGuessMade = true;
 
-                io.to(roomId).emit("new-message", { 
-                    userName: "System", 
-                    message: `${socket.userName} guessed it! (+${points})`, 
-                    isCorrect: true,
-                    isSystem: true 
-                });
+                io.to(roomId).emit("new-message", { userName: "System", message: `${socket.userName} guessed it! (+${points})`, isCorrect: true, isSystem: true });
                 
-                // If everyone (except drawer) guessed, end round early
                 const guessers = room.players.filter(p => p.id !== room.currentDrawer);
-                if (guessers.every(p => p.hasGuessed)) {
-                    room.timer = 0; 
-                }
+                if (guessers.every(p => p.hasGuessed)) room.timer = 0; 
             } else {
                 io.to(roomId).emit("new-message", { userName: socket.userName, message, isCorrect: false });
             }
